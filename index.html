@@ -7,7 +7,11 @@
 <link rel="icon" href="data:,">
 <link href="https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<!-- Plugin d'export PDF officiel pour MapLibre -->
+<link href="https://watergis.github.io/maplibre-gl-export/maplibre-gl-export.css" rel="stylesheet" />
+<script src="https://watergis.github.io/maplibre-gl-export/maplibre-gl-export.js"></script>
+
 <style>
   :root {
     --bg-panel: rgba(15, 15, 20, 0.78);
@@ -40,7 +44,6 @@
   #panel.collapsed { width: 52px; padding-bottom: 0; }
   #panel.collapsed #basemap-switch,
   #panel.collapsed #panel-body,
-  #panel.collapsed #export-btn,
   #panel.collapsed .sub,
   #panel.collapsed #panel-header h1 { display: none; }
   #panel.collapsed #panel-header {
@@ -170,21 +173,6 @@
     box-shadow: 0 0 0 1px rgba(255,255,255,0.15);
   }
 
-  #export-btn {
-    display:flex; align-items:center; justify-content:center; gap:6px;
-    margin: 10px 22px 0 22px; padding:8px 12px;
-    background: rgba(255,255,255,0.06);
-    border:1px solid var(--border);
-    border-radius:8px; color: var(--text);
-    font-family:'Inter',sans-serif; font-size:12px; font-weight:600;
-    cursor:pointer; transition: all .2s;
-  }
-  #export-btn:hover {
-    background: var(--accent-soft);
-    border-color: var(--accent); color: var(--accent);
-  }
-  #export-btn:disabled { opacity:.4; cursor:wait; }
-
   #status {
     position:absolute; bottom:16px; right:16px; z-index:1000;
     background: var(--bg-panel);
@@ -243,27 +231,12 @@
     #status { bottom: 12px; right: 12px; font-size: 10px; padding: 6px 10px; }
     #basemap-switch { margin: 10px 14px 4px 14px; }
     #panel-body { padding: 0 14px; }
-    #export-btn { margin: 8px 14px 0 14px; }
   }
   @media (max-width: 480px) {
     #panel { max-height: 50vh; }
     #panel-header h1 { font-size: 15px; }
     #panel-body label { font-size: 12px; padding: 5px 6px; }
   }
-
-  #export-overlay {
-    position: fixed; inset:0; z-index:9999;
-    background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
-    display:none; align-items:center; justify-content:center;
-    color:#fff; font-family:'Inter',sans-serif; font-weight:600;
-  }
-  #export-overlay.show { display:flex; }
-  #export-overlay .spinner {
-    width: 32px; height: 32px; border: 3px solid rgba(255,20,147,0.2);
-    border-top-color: var(--accent); border-radius: 50%;
-    animation: spin .8s linear infinite; margin-right: 12px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -319,13 +292,9 @@
       <div><span style="background:#ca8a04;"></span>Indice de fragmentation</div>
     </div>
   </div>
-
-  <button id="export-btn" title="Exporter la carte en PDF">📄 Exporter en PDF</button>
 </div>
 
 <div id="status" class="ready"><span class="dot"></span><span id="status-text">12/12 couches</span></div>
-
-<div id="export-overlay" class=""><div class="spinner"></div>Génération du PDF…</div>
 
 <script type="module">
 import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
@@ -337,14 +306,28 @@ const map = new maplibregl.Map({
   container: 'map',
   style: 'https://tiles.openfreemap.org/styles/liberty',
   center: [55.5, -21.1],
-  zoom: 9,
-  preserveDrawingBuffer: true
+  zoom: 9
 });
 
 window.map = map;
 window.maplibregl = maplibregl;
 
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+// ============================================================
+// PLUGIN D'EXPORT PDF (officiel, gère la capture WebGL)
+// ============================================================
+const exportControl = new MaplibreExportControl({
+  PageSize: 'A4',
+  PageOrientation: 'landscape',
+  Format: 'pdf',
+  DPI: 300,
+  Filename: 'monitor-sar-reunion',
+  Crosshair: true,
+  PrintableArea: true,
+  Local: 'fr'
+});
+map.addControl(exportControl, 'top-right');
 
 // ============================================================
 // 2. BASCULE PLAN / SATELLITE
@@ -593,110 +576,7 @@ map.on('load', () => {
 updateStatus();
 
 // ============================================================
-// 5. EXPORT PDF EXPERT
-// ============================================================
-const exportBtn = document.getElementById('export-btn');
-const exportOverlay = document.getElementById('export-overlay');
-
-exportBtn.addEventListener('click', async () => {
-  exportBtn.disabled = true;
-  exportOverlay.classList.add('show');
-
-  try {
-    map.triggerRepaint();
-    await new Promise(r => setTimeout(r, 500));
-
-    await new Promise((resolve) => {
-      if (map.loaded()) return resolve();
-      map.once('idle', resolve);
-      setTimeout(resolve, 4000);
-    });
-
-    const canvas = map.getCanvas();
-    const dataURL = canvas.toDataURL('image/png');
-
-    const { jsPDF } = window.jspdf;
-    const orientation = canvas.width >= canvas.height ? 'landscape' : 'portrait';
-    const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a4' });
-
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const margin = 10;
-    const titleH = 14;
-    const legendH = 22;
-
-    pdf.setFillColor(15, 15, 20);
-    pdf.rect(0, 0, pageW, titleH, 'F');
-    pdf.setTextColor(255, 20, 147);
-    pdf.setFont('helvetica', 'bold');
-    pdf.setFontSize(12);
-    pdf.text('Monitor SAR — La Réunion', margin, 9);
-    pdf.setTextColor(200, 200, 200);
-    pdf.setFont('helvetica', 'normal');
-    pdf.setFontSize(8);
-    const dateStr = new Date().toLocaleString('fr-FR');
-    pdf.text(`Export du ${dateStr}`, pageW - margin, 9, { align: 'right' });
-
-    const availW = pageW - margin * 2;
-    const availH = pageH - titleH - margin * 2 - legendH;
-    const ratio = Math.min(availW / canvas.width, availH / canvas.height);
-    const imgW = canvas.width * ratio;
-    const imgH = canvas.height * ratio;
-    const imgX = (pageW - imgW) / 2;
-    const imgY = titleH + margin;
-
-    pdf.addImage(dataURL, 'PNG', imgX, imgY, imgW, imgH);
-
-    const activeLayers = Array.from(document.querySelectorAll('input[data-layer]:checked'))
-      .map(cb => {
-        const label = cb.parentElement.textContent.trim();
-        const key = cb.dataset.layer;
-        return { label, color: registry[key]?.color || '#888' };
-      });
-
-    if (activeLayers.length) {
-      let ly = imgY + imgH + 8;
-      pdf.setFontSize(7);
-      pdf.setTextColor(80, 80, 80);
-      pdf.setFont('helvetica', 'bold');
-      pdf.text('Couches actives :', margin, ly);
-      pdf.setFont('helvetica', 'normal');
-      let lx = margin + 26;
-
-      activeLayers.forEach(l => {
-        const textW = pdf.getTextWidth(l.label) + 8;
-        if (lx + textW > pageW - margin) {
-          lx = margin + 26; ly += 4;
-        }
-        pdf.setFillColor(l.color);
-        pdf.rect(lx, ly - 2.2, 2.5, 2.5, 'F');
-        pdf.setTextColor(50, 50, 50);
-        pdf.text(l.label, lx + 4, ly);
-        lx += textW + 4;
-      });
-    }
-
-    pdf.setTextColor(150, 150, 150);
-    pdf.setFontSize(6);
-    pdf.setFont('helvetica', 'normal');
-    pdf.text(
-      'Source : données SAR — La Réunion · Généré avec Monitor SAR',
-      pageW / 2, pageH - 3, { align: 'center' }
-    );
-
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-    pdf.save(`monitor-sar-reunion-${stamp}.pdf`);
-  } catch (err) {
-    console.error('Export PDF échoué :', err);
-    alert("L'export PDF a échoué :\n" + err.message);
-  } finally {
-    exportBtn.disabled = false;
-    exportOverlay.classList.remove('show');
-  }
-});
-
-// ============================================================
-// 6. RESPONSIVE
+// 5. RESPONSIVE
 // ============================================================
 window.addEventListener('resize', () => {
   const rect = panel.getBoundingClientRect();
@@ -710,7 +590,7 @@ window.addEventListener('resize', () => {
 });
 
 // ============================================================
-// 7. RACCOURCI ÉCHAP
+// 6. RACCOURCI ÉCHAP
 // ============================================================
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') toggleBtn.click();
