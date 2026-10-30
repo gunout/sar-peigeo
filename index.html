@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Monitor SAR — La Réunion</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.css" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-panel: rgba(15, 15, 20, 0.78);
+    --border: rgba(255,255,255,0.12);
+    --text: #ffffff;
+    --text-muted: rgba(255,255,255,0.55);
+    --accent: #ff1493;
+    --accent-glow: rgba(255,20,147,0.7);
+    --accent-soft: rgba(255,20,147,0.15);
+    --shadow: 0 8px 32px rgba(0,0,0,0.45);
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: 'Inter', system-ui, sans-serif; color: var(--text); }
+  #map { height:100vh; background:#e8eef3; }
+
+  #panel {
+    position:absolute; top:16px; left:16px; z-index:1000;
+    background: var(--bg-panel);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    padding:0 0 18px 0; border-radius:14px;
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border);
+    width:320px; max-height:calc(100vh - 32px);
+    display:flex; flex-direction:column;
+    font-size:13px; color: var(--text);
+  }
+
+  #panel-header {
+    padding:18px 22px 12px 22px;
+    cursor: grab; user-select: none;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+  #panel-header:active { cursor: grabbing; }
+  #panel-header h1 {
+    font-size:17px; font-weight:700; margin:0 0 2px;
+    letter-spacing:-0.3px; color: var(--text);
+  }
+  #panel-header h1::before {
+    content:''; display:inline-block;
+    width:8px; height:8px; border-radius:50%;
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+    margin-right:8px; vertical-align:middle;
+  }
+  #panel-header .sub {
+    font-size:11px; color: var(--text-muted); margin:0;
+    font-weight:500; text-transform:uppercase; letter-spacing:0.3px;
+  }
+  #panel-header::after {
+    content:'⋮⋮'; position:absolute; top:16px; right:18px;
+    color: var(--accent); font-size:14px; letter-spacing:-2px;
+    opacity:.7;
+  }
+
+  /* Bascule Plan / Satellite */
+  #basemap-switch {
+    display:flex; margin: 14px 22px 4px 22px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+    border-radius:8px; padding:3px;
+    position: relative;
+  }
+  #basemap-switch button {
+    flex:1; background:transparent; border:none;
+    color: var(--text-muted); font-family:'Inter',sans-serif;
+    font-size:12px; font-weight:600;
+    padding:7px 10px; border-radius:6px;
+    cursor:pointer; transition: all .2s;
+    position: relative; z-index:1;
+  }
+  #basemap-switch button:hover { color: var(--text); }
+  #basemap-switch button.active {
+    color: #0f0f14;
+    text-shadow: none;
+  }
+  /* Indicateur glissant */
+  #basemap-switch .slider {
+    position:absolute; top:3px; bottom:3px;
+    width:calc(50% - 3px);
+    background: var(--accent);
+    border-radius:6px;
+    box-shadow: 0 0 12px var(--accent-glow);
+    transition: left .25s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index:0;
+  }
+  #basemap-switch[data-active="plan"] .slider { left:3px; }
+  #basemap-switch[data-active="satellite"] .slider { left:calc(50%); }
+
+  #panel-body {
+    overflow-y:auto; padding: 0 22px; flex:1;
+  }
+  #panel-body::-webkit-scrollbar { width:6px; }
+  #panel-body::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.15); border-radius:3px; }
+
+  #panel-body h2 {
+    font-size:10px; font-weight:600; margin:14px 0 6px;
+    color: var(--text-muted); text-transform:uppercase;
+    letter-spacing:1px;
+  }
+  #panel-body label {
+    display:flex; align-items:center; gap:8px;
+    margin:4px 0; padding:6px 8px; border-radius:6px;
+    cursor:pointer; user-select:none; font-size:12.5px;
+    transition: background .15s;
+    color: var(--text);
+  }
+  #panel-body label:hover { background: var(--accent-soft); }
+  #panel-body label:hover input[type="checkbox"]:not(:checked) {
+    border-color: var(--accent);
+  }
+  #panel-body input[type="checkbox"] {
+    appearance:none; -webkit-appearance:none;
+    width:16px; height:16px; border:1.5px solid rgba(255,255,255,0.35);
+    border-radius:4px; cursor:pointer; position:relative;
+    transition: all .15s; flex-shrink:0; background: transparent;
+  }
+  #panel-body input[type="checkbox"]:checked {
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 8px var(--accent-glow);
+  }
+  #panel-body input[type="checkbox"]:checked::after {
+    content:''; position:absolute; left:4px; top:1px;
+    width:5px; height:9px; border: solid #0f0f14;
+    border-width:0 2px 2px 0; transform:rotate(45deg);
+  }
+  #panel-body input[type="checkbox"]:disabled { opacity:.3; cursor:not-allowed; }
+
+  .legend-box {
+    margin-top:14px; padding-top:12px;
+    border-top:1px solid var(--border);
+    font-size:11px; color: var(--text-muted);
+  }
+  .legend-box div { display:flex; align-items:center; margin:4px 0; gap:8px; }
+  .legend-box span {
+    display:inline-block; width:10px; height:10px;
+    border-radius:2px; flex-shrink:0;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.15);
+  }
+
+  #status {
+    position:absolute; bottom:16px; right:16px; z-index:1000;
+    background: var(--bg-panel);
+    backdrop-filter: blur(18px) saturate(140%);
+    padding:8px 14px; border-radius:10px;
+    font-size:11px; font-weight:500; color: var(--text-muted);
+    box-shadow: var(--shadow); border:1px solid var(--border);
+    display:flex; align-items:center; gap:8px;
+  }
+  #status .dot {
+    width:8px; height:8px; border-radius:50%;
+    background:#f59e0b; transition: all .3s;
+  }
+  #status.ready .dot {
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+  }
+
+  .maplibregl-popup-content {
+    border-radius:10px !important;
+    box-shadow: var(--shadow) !important;
+    padding:14px 16px !important;
+    font-family:'Inter', sans-serif !important;
+    font-size:12px !important; line-height:1.6 !important;
+    background: rgba(15,15,20,0.94) !important;
+    color: #fff !important;
+    border: 1px solid rgba(255,20,147,0.3);
+  }
+  .maplibregl-popup-content b {
+    color: var(--accent); font-weight:600;
+    text-shadow: 0 0 8px var(--accent-glow);
+  }
+  .maplibregl-popup-tip { border-top-color: rgba(15,15,20,0.94) !important; }
+  .maplibregl-popup-close-button { color:#fff !important; font-size:16px !important; }
+  .maplibregl-popup-close-button:hover { color: var(--accent) !important; }
+
+  .maplibregl-ctrl-zoom-in, .maplibregl-ctrl-zoom-out {
+    background: var(--bg-panel) !important;
+    backdrop-filter: blur(18px) saturate(140%);
+    border: 1px solid var(--border) !important;
+    border-radius:6px !important;
+    color: #fff !important;
+  }
+  .maplibregl-ctrl-zoom-in:hover, .maplibregl-ctrl-zoom-out:hover {
+    background: var(--accent-soft) !important;
+  }
+  .maplibregl-ctrl-zoom-in span, .maplibregl-ctrl-zoom-out span { filter: invert(1); }
+  .maplibregl-ctrl-attrib {
+    background: var(--bg-panel) !important;
+    backdrop-filter: blur(18px) saturate(140%);
+    font-size:10px !important; border-radius:6px !important;
+    color: var(--text-muted) !important;
+  }
+  .maplibregl-ctrl-attrib a { color: var(--text-muted) !important; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+  <div id="panel-header">
+    <h1>Monitor SAR</h1>
+    <p class="sub">La Réunion · Suivi cartographique</p>
+  </div>
+
+  <!-- Bascule Plan / Satellite -->
+  <div id="basemap-switch" data-active="plan">
+    <div class="slider"></div>
+    <button data-basemap="plan" class="active">🗺️ Plan</button>
+    <button data-basemap="satellite">🛰️ Satellite</button>
+  </div>
+
+  <div id="panel-body">
+    <h2>Contexte</h2>
+    <label><input type="checkbox" data-layer="communes" checked> Limites communales</label>
+
+    <h2>Étalement urbain</h2>
+    <label><input type="checkbox" data-layer="tache_urbaine_1997"> Tache urbaine 1997</label>
+    <label><input type="checkbox" data-layer="tache_urbaine_2020"> Tache urbaine 2020</label>
+    <label><input type="checkbox" data-layer="tache_urbaine_2025"> Tache urbaine 2025</label>
+    <label><input type="checkbox" data-layer="enveloppe_urbaine"> Enveloppe urbaine</label>
+    <label><input type="checkbox" data-layer="friches_urbaines"> Friches urbaines</label>
+
+    <h2>Occupation du sol</h2>
+    <label><input type="checkbox" data-layer="mos_zone_construite_2017"> Zones construites 2017</label>
+    <label><input type="checkbox" data-layer="mos_agricole_2017"> Cultures 2017</label>
+    <label><input type="checkbox" data-layer="zae_2023"> ZAE 2023</label>
+
+    <h2>Naturel & fragmentation</h2>
+    <label><input type="checkbox" data-layer="milieux_naturels"> Milieux naturels</label>
+    <label><input type="checkbox" data-layer="pai_espaces_naturels"> PAI espaces naturels</label>
+    <label><input type="checkbox" data-layer="indice_ifm"> Indice de fragmentation</label>
+
+    <div class="legend-box">
+      <div><span style="background:#94a3b8;"></span>Limites communales</div>
+      <div><span style="background:#a16207;"></span>Tache urbaine 1997</div>
+      <div><span style="background:#dc2626;"></span>Tache urbaine 2020</div>
+      <div><span style="background:#991b1b;"></span>Tache urbaine 2025</div>
+      <div><span style="background:#ea580c;"></span>Enveloppe urbaine</div>
+      <div><span style="background:#7e22ce;"></span>Friches urbaines</div>
+      <div><span style="background:#be123c;"></span>Zones construites 2017</div>
+      <div><span style="background:#15803d;"></span>Cultures 2017</div>
+      <div><span style="background:#4ade80;"></span>ZAE 2023</div>
+      <div><span style="background:#0369a1;"></span>Milieux naturels</div>
+      <div><span style="background:#0f766e;"></span>PAI espaces naturels</div>
+      <div><span style="background:#ca8a04;"></span>Indice de fragmentation</div>
+    </div>
+  </div>
+</div>
+
+<div id="status"><span class="dot"></span><span id="status-text">Chargement…</span></div>
+
+<script type="module">
+import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
+
+// ============================================================
+// 1. Carte — fond Plan (OpenFreeMap Liberty) par défaut
+// ============================================================
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://tiles.openfreemap.org/styles/liberty',
+  center: [55.5, -21.1],
+  zoom: 9
+});
+
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+// ============================================================
+// 2. Bascule Plan / Satellite
+// ============================================================
+const PLAN_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
+const SATELLITE_STYLE = {
+  version: 8,
+  sources: {
+    'esri-satellite': {
+      type: 'raster',
+      tiles: [
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+      ],
+      tileSize: 256,
+      attribution: '© Esri, Maxar, Earthstar Geographics'
+    }
+  },
+  layers: [
+    {
+      id: 'esri-satellite-layer',
+      type: 'raster',
+      source: 'esri-satellite',
+      minzoom: 0,
+      maxzoom: 19
+    }
+  ]
+};
+
+let currentBasemap = 'plan';
+
+// Préserver les couches lors du changement de style
+map.on('style.load', () => {
+  // Recharger les sources/layers GeoJSON après un setStyle
+  if (Object.keys(loadedLayers).length) {
+    Object.entries(loadedLayers).forEach(([key, info]) => {
+      if (geojsonCache[key]) {
+        addGeoJSONLayer(key, registry[key], geojsonCache[key], info.layerId);
+      }
+    });
+  }
+});
+
+// Cache des GeoJSON pour restaurer après setStyle
+const geojsonCache = {};
+
+async function switchBasemap(type) {
+  if (type === currentBasemap) return;
+  currentBasemap = type;
+
+  // Mettre à jour le slider
+  const sw = document.getElementById('basemap-switch');
+  sw.dataset.active = type;
+  sw.querySelectorAll('button').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.basemap === type);
+  });
+
+  // Changer le style
+  map.setStyle(type === 'plan' ? PLAN_STYLE : SATELLITE_STYLE);
+
+  // Attendre que le nouveau style soit chargé avant de réappliquer les couches
+  map.once('styledata', () => {
+    setTimeout(() => {
+      Object.entries(geojsonCache).forEach(([key, data]) => {
+        if (!map.getSource(`src-${key}`)) {
+          addGeoJSONLayer(key, registry[key], data, `layer-${key}`);
+        }
+      });
+      // Restaurer la visibilité selon les checkboxes
+      document.querySelectorAll('input[data-layer]').forEach(cb => {
+        const key = cb.dataset.layer;
+        const layerId = `layer-${key}`;
+        if (map.getLayer(layerId)) {
+          map.setLayoutProperty(layerId, 'visibility', cb.checked ? 'visible' : 'none');
+        }
+      });
+    }, 100);
+  });
+}
+
+document.querySelectorAll('#basemap-switch button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    switchBasemap(btn.dataset.basemap);
+  });
+});
+
+// ============================================================
+// 3. Panneau déplaçable
+// ============================================================
+const panel = document.getElementById('panel');
+const header = document.getElementById('panel-header');
+let isDragging = false, offsetX = 0, offsetY = 0;
+
+header.addEventListener('mousedown', (e) => {
+  isDragging = true;
+  const rect = panel.getBoundingClientRect();
+  offsetX = e.clientX - rect.left;
+  offsetY = e.clientY - rect.top;
+  e.preventDefault();
+});
+document.addEventListener('mousemove', (e) => {
+  if (!isDragging) return;
+  let x = e.clientX - offsetX, y = e.clientY - offsetY;
+  x = Math.max(0, Math.min(x, window.innerWidth - panel.offsetWidth));
+  y = Math.max(0, Math.min(y, window.innerHeight - 80));
+  panel.style.left = x + 'px'; panel.style.top = y + 'px';
+});
+document.addEventListener('mouseup', () => { isDragging = false; });
+
+header.addEventListener('touchstart', (e) => {
+  const touch = e.touches[0];
+  const rect = panel.getBoundingClientRect();
+  offsetX = touch.clientX - rect.left;
+  offsetY = touch.clientY - rect.top;
+  isDragging = true;
+}, { passive: true });
+document.addEventListener('touchmove', (e) => {
+  if (!isDragging) return;
+  const touch = e.touches[0];
+  let x = touch.clientX - offsetX, y = touch.clientY - offsetY;
+  x = Math.max(0, Math.min(x, window.innerWidth - panel.offsetWidth));
+  y = Math.max(0, Math.min(y, window.innerHeight - 80));
+  panel.style.left = x + 'px'; panel.style.top = y + 'px';
+}, { passive: true });
+document.addEventListener('touchend', () => { isDragging = false; });
+
+// ============================================================
+// 4. Registre des couches
+// ============================================================
+const registry = {
+  communes:                { file:'communes_reunion.geojson',              color:'#94a3b8', opacity:0, lineWidth:1.5, dash:[3,3] },
+  tache_urbaine_1997:      { file:'sar_tache_urbaine_1997.geojson',        color:'#a16207', opacity:.35 },
+  tache_urbaine_2020:      { file:'sar_tache_urbaine_2020.geojson',        color:'#dc2626', opacity:.35 },
+  tache_urbaine_2025:      { file:'sar_tache_urbaine_2025.geojson',        color:'#991b1b', opacity:.40 },
+  enveloppe_urbaine:       { file:'sar_enveloppe_urbaine.geojson',         color:'#ea580c', opacity:.20 },
+  friches_urbaines:        { file:'sar_friches_urbaines.geojson',          color:'#7e22ce', opacity:.45 },
+  mos_zone_construite_2017:{ file:'sar_mos_zone_construite_2017.geojson',  color:'#be123c', opacity:.40 },
+  mos_agricole_2017:       { file:'sar_mos_agricole_2017.geojson',         color:'#15803d', opacity:.45 },
+  zae_2023:                { file:'sar_zae_2023.geojson',                  color:'#4ade80', opacity:.35 },
+  milieux_naturels:        { file:'sar_milieux_naturels.geojson',          color:'#0369a1', opacity:.35 },
+  pai_espaces_naturels:    { file:'sar_pai_espaces_naturels.geojson',      color:'#0f766e', opacity:.30 },
+  indice_ifm:              { file:'sar_indice_ifm.geojson',                color:'#ca8a04', opacity:.35 }
+};
+
+const loadedLayers = {};
+let loaded = 0;
+const total = Object.keys(registry).length;
+const statusEl = document.getElementById('status');
+const statusText = document.getElementById('status-text');
+
+function updateStatus() {
+  statusText.textContent = `${loaded}/${total} couches`;
+  if (loaded === total) statusEl.classList.add('ready');
+}
+
+function popupHTML(props) {
+  const keys = Object.keys(props).filter(k => {
+    const v = props[k];
+    return v !== null && v !== undefined && v !== '' && typeof v !== 'object';
+  });
+  if (!keys.length) return '<i>Aucun attribut</i>';
+  return keys.slice(0, 6).map(k => {
+    let v = props[k];
+    if (typeof v === 'number') v = Number.isInteger(v) ? v : v.toFixed(2);
+    return `<b>${k}</b> ${v}`;
+  }).join('<br>');
+}
+
+// Ajoute une couche GeoJSON à la carte (réutilisable après setStyle)
+function addGeoJSONLayer(key, config, geojson, layerId) {
+  const sourceId = `src-${key}`;
+  const isCommunes = key === 'communes';
+
+  if (!map.getSource(sourceId)) {
+    map.addSource(sourceId, { type: 'geojson', data: geojson });
+  }
+
+  if (map.getLayer(layerId)) return;
+
+  if (isCommunes) {
+    map.addLayer({
+      id: layerId, type: 'line', source: sourceId,
+      paint: {
+        'line-color': config.color,
+        'line-width': config.lineWidth || 1,
+        'line-dasharray': config.dash || [1]
+      },
+      layout: { visibility: 'none' }
+    });
+  } else {
+    map.addLayer({
+      id: layerId, type: 'fill', source: sourceId,
+      paint: {
+        'fill-color': config.color,
+        'fill-opacity': config.opacity,
+        'fill-outline-color': config.color
+      },
+      layout: { visibility: 'none' }
+    });
+  }
+
+  map.on('click', layerId, (e) => {
+    const props = e.features[0].properties;
+    new maplibregl.Popup({ maxWidth: '280px' })
+      .setLngLat(e.lngLat).setHTML(popupHTML(props)).addTo(map);
+  });
+  map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
+  map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; });
+}
+
+async function loadLayer(key, config) {
+  try {
+    const response = await fetch('data/' + config.file);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const geojson = await response.json();
+    if (!geojson.features || !geojson.features.length) {
+      const cb = document.querySelector(`input[data-layer="${key}"]`);
+      if (cb) { cb.disabled = true; cb.parentElement.style.opacity = .4; }
+      loaded++; updateStatus(); return;
+    }
+
+    geojsonCache[key] = geojson;
+    const layerId = `layer-${key}`;
+    addGeoJSONLayer(key, config, geojson, layerId);
+    loadedLayers[key] = { layerId };
+
+    const cb = document.querySelector(`input[data-layer="${key}"]`);
+    if (cb) {
+      cb.addEventListener('change', (e) => {
+        if (map.getLayer(layerId)) {
+          map.setLayoutProperty(layerId, 'visibility', e.target.checked ? 'visible' : 'none');
+        }
+      });
+      if (cb.checked && map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, 'visibility', 'visible');
+      }
+    }
+
+    loaded++; updateStatus();
+  } catch (err) {
+    console.warn(`Échec ${key}:`, err.message);
+    const cb = document.querySelector(`input[data-layer="${key}"]`);
+    if (cb) { cb.disabled = true; cb.parentElement.style.opacity = .4; }
+    loaded++; updateStatus();
+  }
+}
+
+map.on('load', () => {
+  Object.entries(registry).forEach(([key, config]) => loadLayer(key, config));
+});
+
+updateStatus();
+</script>
+</body>
+</html>
