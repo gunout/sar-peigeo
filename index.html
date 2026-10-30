@@ -32,7 +32,21 @@
     width:320px; max-height:calc(100vh - 32px);
     display:flex; flex-direction:column;
     font-size:13px; color: var(--text);
+    transition: width .3s cubic-bezier(0.4, 0, 0.2, 1),
+                padding .3s cubic-bezier(0.4, 0, 0.2, 1);
   }
+  #panel.collapsed { width: 52px; padding-bottom: 0; }
+  #panel.collapsed #basemap-switch,
+  #panel.collapsed #panel-body,
+  #panel.collapsed #export-btn,
+  #panel.collapsed .sub,
+  #panel.collapsed #panel-header h1 { display: none; }
+  #panel.collapsed #panel-header {
+    padding: 14px 0; border-bottom: none;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #panel.collapsed #panel-header::after { display: none; }
+  #panel.collapsed #toggle-btn { transform: rotate(180deg); }
 
   #panel-header {
     padding:18px 22px 12px 22px;
@@ -62,6 +76,25 @@
     opacity:.7;
   }
 
+  /* Bouton toggle repli */
+  #toggle-btn {
+    position:absolute; top:14px; right:-26px;
+    width:24px; height:24px; border-radius:50%;
+    background: var(--bg-panel);
+    backdrop-filter: blur(18px);
+    border:1px solid var(--border);
+    color: var(--accent); font-size:11px; font-weight:700;
+    cursor:pointer; display:flex; align-items:center;
+    justify-content:center; z-index:1001;
+    transition: transform .3s, background .15s;
+    box-shadow: var(--shadow);
+  }
+  #toggle-btn:hover { background: var(--accent-soft); }
+  #panel.collapsed #toggle-btn {
+    position: static;
+    width: 30px; height: 30px; font-size: 13px;
+  }
+
   /* Bascule Plan / Satellite */
   #basemap-switch {
     display:flex; margin: 14px 22px 4px 22px;
@@ -83,7 +116,6 @@
     color: #0f0f14;
     text-shadow: none;
   }
-  /* Indicateur glissant */
   #basemap-switch .slider {
     position:absolute; top:3px; bottom:3px;
     width:calc(50% - 3px);
@@ -148,6 +180,23 @@
     box-shadow: 0 0 0 1px rgba(255,255,255,0.15);
   }
 
+  /* Bouton export PDF */
+  #export-btn {
+    display:flex; align-items:center; justify-content:center; gap:6px;
+    margin: 10px 22px 0 22px; padding:8px 12px;
+    background: rgba(255,255,255,0.06);
+    border:1px solid var(--border);
+    border-radius:8px; color: var(--text);
+    font-family:'Inter',sans-serif; font-size:12px; font-weight:600;
+    cursor:pointer; transition: all .2s;
+  }
+  #export-btn:hover {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  #export-btn:disabled { opacity:.4; cursor:wait; }
+
   #status {
     position:absolute; bottom:16px; right:16px; z-index:1000;
     background: var(--bg-panel);
@@ -202,6 +251,44 @@
     color: var(--text-muted) !important;
   }
   .maplibregl-ctrl-attrib a { color: var(--text-muted) !important; }
+
+  /* ------- RESPONSIVE ------- */
+  @media (max-width: 768px) {
+    #panel {
+      width: calc(100vw - 24px);
+      left: 12px; top: 12px;
+      max-height: 45vh;
+    }
+    #panel.collapsed { width: 52px; }
+    #panel.collapsed #panel-header { padding: 10px 0; }
+    #status {
+      bottom: 12px; right: 12px;
+      font-size: 10px; padding: 6px 10px;
+    }
+    #basemap-switch { margin: 10px 14px 4px 14px; }
+    #panel-body { padding: 0 14px; }
+    #export-btn { margin: 8px 14px 0 14px; }
+  }
+  @media (max-width: 480px) {
+    #panel { max-height: 50vh; }
+    #panel-header h1 { font-size: 15px; }
+    #panel-body label { font-size: 12px; padding: 5px 6px; }
+  }
+
+  /* Overlay d'export pour éviter les flashs */
+  #export-overlay {
+    position: fixed; inset:0; z-index:9999;
+    background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+    display:none; align-items:center; justify-content:center;
+    color:#fff; font-family:'Inter',sans-serif; font-weight:600;
+  }
+  #export-overlay.show { display:flex; }
+  #export-overlay .spinner {
+    width: 32px; height: 32px; border: 3px solid rgba(255,20,147,0.2);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin .8s linear infinite; margin-right: 12px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -212,6 +299,7 @@
   <div id="panel-header">
     <h1>Monitor SAR</h1>
     <p class="sub">La Réunion · Suivi cartographique</p>
+    <button id="toggle-btn" title="Replier / déplier le panneau" aria-label="Replier le panneau">◀</button>
   </div>
 
   <!-- Bascule Plan / Satellite -->
@@ -257,9 +345,13 @@
       <div><span style="background:#ca8a04;"></span>Indice de fragmentation</div>
     </div>
   </div>
+
+  <button id="export-btn" title="Exporter la carte en PDF">📄 Exporter en PDF</button>
 </div>
 
 <div id="status"><span class="dot"></span><span id="status-text">Chargement…</span></div>
+
+<div id="export-overlay"><div class="spinner"></div>Génération du PDF…</div>
 
 <script type="module">
 import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
@@ -305,9 +397,10 @@ const SATELLITE_STYLE = {
 
 let currentBasemap = 'plan';
 
-// Préserver les couches lors du changement de style
+// Cache des GeoJSON pour restaurer après setStyle
+const geojsonCache = {};
+
 map.on('style.load', () => {
-  // Recharger les sources/layers GeoJSON après un setStyle
   if (Object.keys(loadedLayers).length) {
     Object.entries(loadedLayers).forEach(([key, info]) => {
       if (geojsonCache[key]) {
@@ -317,24 +410,18 @@ map.on('style.load', () => {
   }
 });
 
-// Cache des GeoJSON pour restaurer après setStyle
-const geojsonCache = {};
-
 async function switchBasemap(type) {
   if (type === currentBasemap) return;
   currentBasemap = type;
 
-  // Mettre à jour le slider
   const sw = document.getElementById('basemap-switch');
   sw.dataset.active = type;
   sw.querySelectorAll('button').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.basemap === type);
   });
 
-  // Changer le style
   map.setStyle(type === 'plan' ? PLAN_STYLE : SATELLITE_STYLE);
 
-  // Attendre que le nouveau style soit chargé avant de réappliquer les couches
   map.once('styledata', () => {
     setTimeout(() => {
       Object.entries(geojsonCache).forEach(([key, data]) => {
@@ -342,7 +429,6 @@ async function switchBasemap(type) {
           addGeoJSONLayer(key, registry[key], data, `layer-${key}`);
         }
       });
-      // Restaurer la visibilité selon les checkboxes
       document.querySelectorAll('input[data-layer]').forEach(cb => {
         const key = cb.dataset.layer;
         const layerId = `layer-${key}`;
@@ -361,13 +447,26 @@ document.querySelectorAll('#basemap-switch button').forEach(btn => {
 });
 
 // ============================================================
-// 3. Panneau déplaçable
+// 3. Panneau déplaçable + bouton de repli
 // ============================================================
 const panel = document.getElementById('panel');
 const header = document.getElementById('panel-header');
+const toggleBtn = document.getElementById('toggle-btn');
 let isDragging = false, offsetX = 0, offsetY = 0;
 
+// --- Bouton de repli / dépli ---
+toggleBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  panel.classList.toggle('collapsed');
+  const collapsed = panel.classList.contains('collapsed');
+  toggleBtn.textContent = collapsed ? '▶' : '◀';
+  toggleBtn.setAttribute('aria-label', collapsed ? 'Déplier le panneau' : 'Replier le panneau');
+  setTimeout(() => map.resize(), 320);
+});
+
+// --- Drag (souris) ---
 header.addEventListener('mousedown', (e) => {
+  if (e.target.closest('#toggle-btn')) return;
   isDragging = true;
   const rect = panel.getBoundingClientRect();
   offsetX = e.clientX - rect.left;
@@ -383,7 +482,9 @@ document.addEventListener('mousemove', (e) => {
 });
 document.addEventListener('mouseup', () => { isDragging = false; });
 
+// --- Drag (tactile) ---
 header.addEventListener('touchstart', (e) => {
+  if (e.target.closest('#toggle-btn')) return;
   const touch = e.touches[0];
   const rect = panel.getBoundingClientRect();
   offsetX = touch.clientX - rect.left;
@@ -442,7 +543,6 @@ function popupHTML(props) {
   }).join('<br>');
 }
 
-// Ajoute une couche GeoJSON à la carte (réutilisable après setStyle)
 function addGeoJSONLayer(key, config, geojson, layerId) {
   const sourceId = `src-${key}`;
   const isCommunes = key === 'communes';
@@ -526,6 +626,169 @@ map.on('load', () => {
 });
 
 updateStatus();
+
+// ============================================================
+// 5. Export PDF de la carte
+// ============================================================
+async function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) return resolve();
+    const s = document.createElement('script');
+    s.src = src; s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function ensureExportLibs() {
+  await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+  await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+}
+
+const exportBtn = document.getElementById('export-btn');
+const exportOverlay = document.getElementById('export-overlay');
+
+exportBtn.addEventListener('click', async () => {
+  exportBtn.disabled = true;
+  exportOverlay.classList.add('show');
+
+  // Replier le panneau pendant la capture
+  const wasCollapsed = panel.classList.contains('collapsed');
+  if (!wasCollapsed) {
+    panel.classList.add('collapsed');
+    toggleBtn.textContent = '▶';
+    await new Promise(r => setTimeout(r, 350));
+  }
+  map.resize();
+  await new Promise(r => setTimeout(r, 500));
+
+  try {
+    await ensureExportLibs();
+    const canvas = await html2canvas(document.getElementById('map'), {
+      useCORS: true,
+      allowTaint: false,
+      backgroundColor: '#ffffff',
+      scale: window.devicePixelRatio > 1 ? 2 : 1.5,
+      logging: false
+    });
+
+    const imgData = canvas.toDataURL('image/png');
+    const { jsPDF } = window.jspdf;
+    const orientation = canvas.width >= canvas.height ? 'landscape' : 'portrait';
+    const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a4' });
+
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const margin = 10;
+    const titleH = 14;
+
+    // Bandeau titre
+    pdf.setFillColor(15, 15, 20);
+    pdf.rect(0, 0, pageW, titleH, 'F');
+    pdf.setTextColor(255, 20, 147);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(12);
+    pdf.text('Monitor SAR — La Réunion', margin, 9);
+    pdf.setTextColor(200, 200, 200);
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(8);
+    const dateStr = new Date().toLocaleString('fr-FR');
+    pdf.text(`Export du ${dateStr}`, pageW - margin, 9, { align: 'right' });
+
+    // Image de la carte
+    const availW = pageW - margin * 2;
+    const availH = pageH - titleH - margin * 2 - 12; // réserve pour légende
+    const ratio = Math.min(availW / canvas.width, availH / canvas.height);
+    const imgW = canvas.width * ratio;
+    const imgH = canvas.height * ratio;
+    const imgX = (pageW - imgW) / 2;
+    const imgY = titleH + margin;
+
+    pdf.addImage(imgData, 'PNG', imgX, imgY, imgW, imgH);
+
+    // Légende des couches actives
+    const activeLayers = Array.from(document.querySelectorAll('input[data-layer]:checked'))
+      .map(cb => {
+        const label = cb.parentElement.textContent.trim();
+        const key = cb.dataset.layer;
+        return { label, color: registry[key]?.color || '#888' };
+      });
+
+    if (activeLayers.length) {
+      let ly = imgY + imgH + 10;
+      pdf.setFontSize(7);
+      pdf.setTextColor(80, 80, 80);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('Couches actives :', margin, ly);
+      pdf.setFont('helvetica', 'normal');
+      let lx = margin + 26;
+      ly += 0;
+
+      activeLayers.forEach(l => {
+        const textW = pdf.getTextWidth(l.label) +         8;
+        if (lx + textW > pageW - margin) {
+          lx = margin + 26; ly += 4;
+        }
+        pdf.setFillColor(l.color);
+        pdf.rect(lx, ly - 2.2, 2.5, 2.5, 'F');
+        pdf.setTextColor(50, 50, 50);
+        pdf.text(l.label, lx + 4, ly);
+        lx += textW + 4;
+      });
+    }
+
+    // Pied de page
+    pdf.setTextColor(150, 150, 150);
+    pdf.setFontSize(6);
+    pdf.setFont('helvetica', 'normal');
+    pdf.text(
+      'Source : données SAR — La Réunion · Généré avec Monitor SAR',
+      pageW / 2, pageH - 3, { align: 'center' }
+    );
+
+    // Téléchargement
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    pdf.save(`monitor-sar-reunion-${stamp}.pdf`);
+  } catch (err) {
+    console.error('Export PDF échoué :', err);
+    alert(
+      "L'export PDF a échoué :\n" + err.message +
+      "\n\nAstuce : les tuiles (surtout satellites) peuvent bloquer la capture " +
+      "pour des raisons de CORS. Essayez en mode Plan."
+    );
+  } finally {
+    // Restaurer l'état du panneau
+    if (!wasCollapsed) {
+      panel.classList.remove('collapsed');
+      toggleBtn.textContent = '◀';
+      setTimeout(() => map.resize(), 320);
+    }
+    exportBtn.disabled = false;
+    exportOverlay.classList.remove('show');
+  }
+});
+
+// ============================================================
+// 6. Responsive : garder le panneau dans l'écran + resize carte
+// ============================================================
+window.addEventListener('resize', () => {
+  const rect = panel.getBoundingClientRect();
+  if (rect.right > window.innerWidth) {
+    panel.style.left = Math.max(0, window.innerWidth - panel.offsetWidth) + 'px';
+  }
+  if (rect.bottom > window.innerHeight) {
+    panel.style.top = Math.max(0, window.innerHeight - 80) + 'px';
+  }
+  map.resize();
+});
+
+// ============================================================
+// 7. Raccourci clavier : Échap replie/déplie le panneau
+// ============================================================
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    toggleBtn.click();
+  }
+});
 </script>
 </body>
 </html>
