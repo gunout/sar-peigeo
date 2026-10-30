@@ -1,3 +1,5 @@
+<div align="center">
+
 # 🗺️ Monitor SAR — La Réunion
 
 [![MapLibre](https://img.shields.io/badge/MapLibre-6.11.2-295DAA?logo=maplibre&logoColor=white)](https://maplibre.org/)
@@ -8,7 +10,7 @@
 [![Made with](https://img.shields.io/badge/Made_with-❤️_for_La_Réunion-ff1493)](https://github.com/gunout/sar-peigeo)
 
 > Tableau de bord cartographique interactif pour le suivi du **Schéma d'Aménagement Régional (SAR)** de La Réunion.
-
+</div>
 ---
 
 ## 📋 Table des matières
