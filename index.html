@@ -330,9 +330,6 @@
 <script type="module">
 import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
 
-<script type="module">
-import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
-
 // ============================================================
 // 1. CARTE
 // ============================================================
@@ -341,7 +338,7 @@ const map = new maplibregl.Map({
   style: 'https://tiles.openfreemap.org/styles/liberty',
   center: [55.5, -21.1],
   zoom: 9,
-  preserveDrawingBuffer: true   // ⚠️ INDISPENSABLE
+  preserveDrawingBuffer: true
 });
 
 window.map = map;
@@ -596,7 +593,7 @@ map.on('load', () => {
 updateStatus();
 
 // ============================================================
-// 5. EXPORT PDF EXPERT (sans html2canvas)
+// 5. EXPORT PDF EXPERT
 // ============================================================
 const exportBtn = document.getElementById('export-btn');
 const exportOverlay = document.getElementById('export-overlay');
@@ -606,22 +603,18 @@ exportBtn.addEventListener('click', async () => {
   exportOverlay.classList.add('show');
 
   try {
-    // 1. Forcer un repaint
     map.triggerRepaint();
     await new Promise(r => setTimeout(r, 500));
 
-    // 2. Attendre que la carte soit idle (tuiles chargées)
     await new Promise((resolve) => {
       if (map.loaded()) return resolve();
       map.once('idle', resolve);
       setTimeout(resolve, 4000);
     });
 
-    // 3. Capture DIRECTE du canvas WebGL
     const canvas = map.getCanvas();
     const dataURL = canvas.toDataURL('image/png');
 
-    // 4. Génération du PDF
     const { jsPDF } = window.jspdf;
     const orientation = canvas.width >= canvas.height ? 'landscape' : 'portrait';
     const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a4' });
@@ -632,7 +625,6 @@ exportBtn.addEventListener('click', async () => {
     const titleH = 14;
     const legendH = 22;
 
-    // Bandeau titre
     pdf.setFillColor(15, 15, 20);
     pdf.rect(0, 0, pageW, titleH, 'F');
     pdf.setTextColor(255, 20, 147);
@@ -645,7 +637,6 @@ exportBtn.addEventListener('click', async () => {
     const dateStr = new Date().toLocaleString('fr-FR');
     pdf.text(`Export du ${dateStr}`, pageW - margin, 9, { align: 'right' });
 
-    // Carte
     const availW = pageW - margin * 2;
     const availH = pageH - titleH - margin * 2 - legendH;
     const ratio = Math.min(availW / canvas.width, availH / canvas.height);
@@ -656,7 +647,6 @@ exportBtn.addEventListener('click', async () => {
 
     pdf.addImage(dataURL, 'PNG', imgX, imgY, imgW, imgH);
 
-    // Légende
     const activeLayers = Array.from(document.querySelectorAll('input[data-layer]:checked'))
       .map(cb => {
         const label = cb.parentElement.textContent.trim();
@@ -686,7 +676,6 @@ exportBtn.addEventListener('click', async () => {
       });
     }
 
-    // Pied de page
     pdf.setTextColor(150, 150, 150);
     pdf.setFontSize(6);
     pdf.setFont('helvetica', 'normal');
@@ -695,7 +684,6 @@ exportBtn.addEventListener('click', async () => {
       pageW / 2, pageH - 3, { align: 'center' }
     );
 
-    // Sauvegarde
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
     pdf.save(`monitor-sar-reunion-${stamp}.pdf`);
   } catch (err) {
