@@ -331,14 +331,14 @@
 import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
 
 // ============================================================
-// 1. CARTE
+// 1. Carte
 // ============================================================
 const map = new maplibregl.Map({
   container: 'map',
   style: 'https://tiles.openfreemap.org/styles/liberty',
   center: [55.5, -21.1],
   zoom: 9,
-  preserveDrawingBuffer: true
+  preserveDrawingBuffer: true   // ⚠️ INDISPENSABLE POUR L'EXPORT PDF
 });
 
 window.map = map;
@@ -347,7 +347,7 @@ window.maplibregl = maplibregl;
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
 // ============================================================
-// 2. BASCULE PLAN / SATELLITE
+// 2. Bascule Plan / Satellite
 // ============================================================
 const PLAN_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 const SATELLITE_STYLE = {
@@ -408,7 +408,7 @@ document.querySelectorAll('#basemap-switch button').forEach(btn => {
 });
 
 // ============================================================
-// 3. PANNEAU DÉPLAÇABLE
+// 3. Panneau déplaçable + bouton de repli
 // ============================================================
 const panel = document.getElementById('panel');
 const header = document.getElementById('panel-header');
@@ -420,6 +420,7 @@ toggleBtn.addEventListener('click', (e) => {
   panel.classList.toggle('collapsed');
   const collapsed = panel.classList.contains('collapsed');
   toggleBtn.textContent = collapsed ? '▶' : '◀';
+  toggleBtn.setAttribute('aria-label', collapsed ? 'Déplier le panneau' : 'Replier le panneau');
   setTimeout(() => map.resize(), 320);
 });
 
@@ -440,8 +441,26 @@ document.addEventListener('mousemove', (e) => {
 });
 document.addEventListener('mouseup', () => { isDragging = false; });
 
+header.addEventListener('touchstart', (e) => {
+  if (e.target.closest('#toggle-btn')) return;
+  const touch = e.touches[0];
+  const rect = panel.getBoundingClientRect();
+  offsetX = touch.clientX - rect.left;
+  offsetY = touch.clientY - rect.top;
+  isDragging = true;
+}, { passive: true });
+document.addEventListener('touchmove', (e) => {
+  if (!isDragging) return;
+  const touch = e.touches[0];
+  let x = touch.clientX - offsetX, y = touch.clientY - offsetY;
+  x = Math.max(0, Math.min(x, window.innerWidth - panel.offsetWidth));
+  y = Math.max(0, Math.min(y, window.innerHeight - 80));
+  panel.style.left = x + 'px'; panel.style.top = y + 'px';
+}, { passive: true });
+document.addEventListener('touchend', () => { isDragging = false; });
+
 // ============================================================
-// 4. REGISTRE DES COUCHES
+// 4. Registre des couches
 // ============================================================
 const registry = {
   communes:                { file:'communes_reunion.geojson',              color:'#94a3b8', opacity:0, lineWidth:1.5, dash:[3,3] },
@@ -532,7 +551,7 @@ function addGeoJSONLayer(key, config, geojson, layerId) {
         layout: { visibility: 'none' }
       });
     } else {
-      console.warn(`⚠️ ${key} : type de géométrie non reconnu.`, types);
+      console.warn(`⚠️ ${key} : type de géométrie non reconnu → couche ignorée.`, types);
       return;
     }
 
@@ -555,6 +574,7 @@ async function loadLayer(key, config) {
     const geojson = await response.json();
 
     if (!geojson.features || !geojson.features.length) {
+      console.warn(`⚠️ ${key} : fichier vide (features: [])`);
       const cb = document.querySelector(`input[data-layer="${key}"]`);
       if (cb) { cb.disabled = true; cb.parentElement.style.opacity = .4; }
       loaded++; updateStatus(); return;
@@ -593,7 +613,7 @@ map.on('load', () => {
 updateStatus();
 
 // ============================================================
-// 5. EXPORT PDF (préserve les couches)
+// 5. EXPORT PDF EXPERT
 // ============================================================
 const exportBtn = document.getElementById('export-btn');
 const exportOverlay = document.getElementById('export-overlay');
@@ -603,26 +623,20 @@ exportBtn.addEventListener('click', async () => {
   exportOverlay.classList.add('show');
 
   try {
+    // Forcer un repaint complet
     map.triggerRepaint();
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 600));
 
+    // Attendre que la carte soit idle (toutes tuiles chargées)
     await new Promise((resolve) => {
       if (map.loaded()) return resolve();
       map.once('idle', resolve);
-      setTimeout(resolve, 5000);
+      setTimeout(resolve, 4000); // sécurité
     });
 
-    await new Promise(r => setTimeout(r, 1500));
-
+    // Capture DIRECTE du canvas WebGL (contourne CORS & html2canvas)
     const canvas = map.getCanvas();
-    let dataURL = canvas.toDataURL('image/png');
-
-    if (!dataURL || dataURL.length < 5000) {
-      console.warn('Canvas vide, nouvelle tentative…');
-      map.triggerRepaint();
-      await new Promise(r => setTimeout(r, 1500));
-      dataURL = canvas.toDataURL('image/png');
-    }
+    const dataURL = canvas.toDataURL('image/png');
 
     const { jsPDF } = window.jspdf;
     const orientation = canvas.width >= canvas.height ? 'landscape' : 'portrait';
@@ -634,6 +648,7 @@ exportBtn.addEventListener('click', async () => {
     const titleH = 14;
     const legendH = 22;
 
+    // ---------- Bandeau titre ----------
     pdf.setFillColor(15, 15, 20);
     pdf.rect(0, 0, pageW, titleH, 'F');
     pdf.setTextColor(255, 20, 147);
@@ -646,6 +661,7 @@ exportBtn.addEventListener('click', async () => {
     const dateStr = new Date().toLocaleString('fr-FR');
     pdf.text(`Export du ${dateStr}`, pageW - margin, 9, { align: 'right' });
 
+    // ---------- Carte ----------
     const availW = pageW - margin * 2;
     const availH = pageH - titleH - margin * 2 - legendH;
     const ratio = Math.min(availW / canvas.width, availH / canvas.height);
@@ -656,7 +672,8 @@ exportBtn.addEventListener('click', async () => {
 
     pdf.addImage(dataURL, 'PNG', imgX, imgY, imgW, imgH);
 
-    const activeLayers = Array.from(document.querySelectorAll('input[data-layer]:checked'))
+    // ---------- Légende des couches actives ----------
+    const activeLayers =    Array.from(document.querySelectorAll('input[data-layer]:checked'))
       .map(cb => {
         const label = cb.parentElement.textContent.trim();
         const key = cb.dataset.layer;
@@ -685,6 +702,7 @@ exportBtn.addEventListener('click', async () => {
       });
     }
 
+    // ---------- Pied de page ----------
     pdf.setTextColor(150, 150, 150);
     pdf.setFontSize(6);
     pdf.setFont('helvetica', 'normal');
@@ -697,7 +715,8 @@ exportBtn.addEventListener('click', async () => {
     pdf.save(`monitor-sar-reunion-${stamp}.pdf`);
   } catch (err) {
     console.error('Export PDF échoué :', err);
-    alert("L'export PDF a échoué :\n" + err.message);  } finally {
+    alert("L'export PDF a échoué :\n" + err.message);
+  } finally {
     exportBtn.disabled = false;
     exportOverlay.classList.remove('show');
   }
@@ -718,7 +737,7 @@ window.addEventListener('resize', () => {
 });
 
 // ============================================================
-// 7. RACCOURCI ÉCHAP
+// 7. RACCOURCI : ÉCHAP
 // ============================================================
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') toggleBtn.click();
