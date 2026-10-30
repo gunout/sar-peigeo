@@ -8,6 +8,7 @@
 <link href="https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
   :root {
     --bg-panel: rgba(15, 15, 20, 0.78);
@@ -320,7 +321,8 @@
     </div>
   </div>
 
-  <button id="export-btn" title="Exporter la carte en PDF">📄 Exporter en PDF</button>
+  <button id="export-btn" title="Exporter la carte visible en PDF (méthode 1 : capture WebGL)">📄 Exporter en PDF</button>
+  <button id="export-static-btn" title="Télécharger un PDF statique pré-généré (toujours disponible)" style="display:flex; align-items:center; justify-content:center; gap:6px; margin: 6px 22px 0 22px; padding:7px 12px; background: rgba(255,255,255,0.06); border:1px solid var(--border); border-radius:8px; color: var(--text); font-family:'Inter',sans-serif; font-size:11px; font-weight:500; cursor:pointer; transition: all .2s;">📑 PDF statique (déjà prêt)</button>
 </div>
 
 <div id="status" class="ready"><span class="dot"></span><span id="status-text">12/12 couches</span></div>
@@ -605,6 +607,63 @@ updateStatus();
 const exportBtn = document.getElementById('export-btn');
 const exportOverlay = document.getElementById('export-overlay');
 
+// Bouton 'PDF statique' - telecharge le PDF pre-genere Monitor-SAR-static.pdf
+// qui se trouve a cote de index.html. Solution de secours garantie.
+const exportStaticBtn = document.getElementById('export-static-btn');
+if (exportStaticBtn) {
+  exportStaticBtn.addEventListener('click', () => {
+    // Tente plusieurs chemins possibles (selon ou l'utilisateur a place les fichiers)
+    const candidates = [
+      'Monitor-SAR-static.pdf',
+      './Monitor-SAR-static.pdf',
+      'Monitor-SAR-La-Reunion.pdf',
+      './Monitor-SAR-La-Reunion.pdf',
+      '../download/Monitor-SAR-static.pdf'
+    ];
+    let idx = 0;
+    const tryNext = () => {
+      if (idx >= candidates.length) {
+        alert(
+          "Le PDF statique n'a pas ete trouve a cote de index.html.\n" +
+          "Placez le fichier Monitor-SAR-static.pdf (fourni dans le meme dossier)\n" +
+          "a cote de index.html, ou telechargez-le manuellement."
+        );
+        return;
+      }
+      const url = candidates[idx++];
+      const xhr = new XMLHttpRequest();
+      xhr.open('HEAD', url, true);
+      xhr.onload = () => {
+        if (xhr.status === 200) {
+          // Le fichier existe - on lance le telechargement
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'Monitor-SAR-La-Reunion.pdf';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } else {
+          tryNext();
+        }
+      };
+      xhr.onerror = tryNext;
+      xhr.send();
+    };
+    tryNext();
+  });
+  // Hover effect
+  exportStaticBtn.addEventListener('mouseenter', () => {
+    exportStaticBtn.style.background = 'rgba(255,20,147,0.15)';
+    exportStaticBtn.style.borderColor = '#ff1493';
+    exportStaticBtn.style.color = '#ff1493';
+  });
+  exportStaticBtn.addEventListener('mouseleave', () => {
+    exportStaticBtn.style.background = 'rgba(255,255,255,0.06)';
+    exportStaticBtn.style.borderColor = 'rgba(255,255,255,0.12)';
+    exportStaticBtn.style.color = '#ffffff';
+  });
+}
+
 function setOverlayText(msg) {
   exportOverlay.innerHTML = '<div class="spinner"></div>' + msg;
 }
@@ -692,8 +751,31 @@ function isCanvasBlank(dataURL) {
 /**
  * Capture le canvas WebGL en PNG. Tente jusqu'a 3 fois avec attente entre.
  */
+async function captureWithHtml2Canvas() {
+  if (typeof html2canvas === 'undefined') {
+    throw new Error('html2canvas non charge.');
+  }
+  setOverlayText('Capture alternative (html2canvas) en cours...');
+  const mapEl = document.getElementById('map');
+  const result = await html2canvas(mapEl, {
+    useCORS: true,
+    allowTaint: false,
+    backgroundColor: '#e8eef3',
+    scale: 2,
+    logging: false,
+    ignoreElements: (el) => {
+      return el.id === 'panel' || el.id === 'status' ||
+             el.id === 'export-overlay' ||
+             (el.classList && el.classList.contains('maplibregl-ctrl-top-right'));
+    }
+  });
+  return result.toDataURL('image/png');
+}
+
 async function captureCanvas(maxAttempts = 3) {
   let lastDataURL = null;
+  let html2canvasTried = false;
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     setOverlayText('Capture de la carte (tentative ' + attempt + '/' + maxAttempts + ')...');
     map.triggerRepaint();
@@ -706,11 +788,25 @@ async function captureCanvas(maxAttempts = 3) {
     try {
       dataURL = canvas.toDataURL('image/png');
     } catch (e) {
-      throw new Error(
-        "Le navigateur a refuse la capture WebGL (toDataURL).\n" +
-        "Cause probable : preserveDrawingBuffer desactive ou CORS.\n" +
-        "Details : " + e.message
-      );
+      console.warn('toDataURL() a echoue, bascule vers html2canvas :', e.message);
+      if (!html2canvasTried) {
+        html2canvasTried = true;
+        try {
+          dataURL = await captureWithHtml2Canvas();
+        } catch (e2) {
+          throw new Error(
+            "toDataURL ET html2canvas ont echoue.\n" +
+            "toDataURL : " + e.message + "\n" +
+            "html2canvas : " + e2.message
+          );
+        }
+      } else {
+        throw new Error(
+          "Le navigateur a refuse la capture WebGL (toDataURL).\n" +
+          "Cause probable : preserveDrawingBuffer desactive ou CORS.\n" +
+          "Details : " + e.message
+        );
+      }
     }
     lastDataURL = dataURL;
     const blank = await isCanvasBlank(dataURL);
@@ -719,6 +815,23 @@ async function captureCanvas(maxAttempts = 3) {
       return dataURL;
     }
     console.warn('Tentative ' + attempt + ' : canvas blanc/variance faible (taille=' + dataURL.length + ').');
+
+    // Si la methode directe a donne un canvas blanc, tenter html2canvas une fois
+    if (!html2canvasTried && attempt === maxAttempts) {
+      console.warn('Bascule vers html2canvas (fallback final)...');
+      html2canvasTried = true;
+      try {
+        dataURL = await captureWithHtml2Canvas();
+        const blank2 = await isCanvasBlank(dataURL);
+        if (!blank2 && dataURL.length > 50000) {
+          console.log('Capture html2canvas reussie (' + dataURL.length + ' octets)');
+          return dataURL;
+        }
+      } catch (e2) {
+        console.warn('html2canvas aussi a echoue :', e2.message);
+      }
+    }
+
     if (attempt < maxAttempts) {
       setOverlayText('Canvas vide detecte - nouvelle tentative dans 2 s...');
       await new Promise(r => setTimeout(r, 2000));
@@ -730,7 +843,9 @@ async function captureCanvas(maxAttempts = 3) {
     "  - Les couches ne sont pas encore chargees (attendez 10-20 s avant export)\n" +
     "  - Le navigateur bloque WebGL (essayez Chrome/Edge recent)\n" +
     "  - L'acceleration materielle est desactivee\n" +
-    'Astuce : cochez les couches une par une, attendez le statut "12/12" en bas a droite.'
+    "  - Vos tuiles sont partiellement chargees\n\n" +
+    "SOLUTION DE SECOURS : cliquez sur le bouton 'PDF statique' ci-dessous\n" +
+    "pour telecharger un PDF pre-genere avec les memes donnees."
   );
 }
 
