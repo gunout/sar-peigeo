@@ -5,8 +5,9 @@
 <title>Monitor SAR — La Réunion</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
-<link href="https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.css" rel="stylesheet" />
+<link href="https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.css" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   :root {
     --bg-panel: rgba(15, 15, 20, 0.78);
@@ -269,7 +270,7 @@
 
 <div id="map"></div>
 
-<div id="panel">
+<div id="panel" class="">
   <div id="panel-header">
     <h1>Monitor SAR</h1>
     <p class="sub">La Réunion · Suivi cartographique</p>
@@ -298,7 +299,7 @@
     <label><input type="checkbox" data-layer="mos_agricole_2017"> Cultures 2017</label>
     <label><input type="checkbox" data-layer="zae_2023"> ZAE 2023</label>
 
-    <h2>Naturel & fragmentation</h2>
+    <h2>Naturel &amp; fragmentation</h2>
     <label><input type="checkbox" data-layer="milieux_naturels"> Milieux naturels</label>
     <label><input type="checkbox" data-layer="pai_espaces_naturels"> PAI espaces naturels</label>
     <label><input type="checkbox" data-layer="indice_ifm"> Indice de fragmentation</label>
@@ -322,9 +323,9 @@
   <button id="export-btn" title="Exporter la carte en PDF">📄 Exporter en PDF</button>
 </div>
 
-<div id="status"><span class="dot"></span><span id="status-text">Chargement…</span></div>
+<div id="status" class="ready"><span class="dot"></span><span id="status-text">12/12 couches</span></div>
 
-<div id="export-overlay"><div class="spinner"></div>Génération du PDF…</div>
+<div id="export-overlay" class=""><div class="spinner"></div>Génération du PDF…</div>
 
 <script type="module">
 import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
@@ -336,10 +337,10 @@ const map = new maplibregl.Map({
   container: 'map',
   style: 'https://tiles.openfreemap.org/styles/liberty',
   center: [55.5, -21.1],
-  zoom: 9
+  zoom: 9,
+  preserveDrawingBuffer: true   // ⚠️ INDISPENSABLE POUR L'EXPORT PDF
 });
 
-// ⚠️ EXPOSITION GLOBALE POUR DÉBOGAGE (console navigateur)
 window.map = map;
 window.maplibregl = maplibregl;
 
@@ -500,9 +501,6 @@ function popupHTML(props) {
   }).join('<br>');
 }
 
-// ------------------------------------------------------------
-// addGeoJSONLayer robuste : détecte polygone / ligne / point
-// ------------------------------------------------------------
 function addGeoJSONLayer(key, config, geojson, layerId) {
   try {
     const sourceId = `src-${key}`;
@@ -513,7 +511,6 @@ function addGeoJSONLayer(key, config, geojson, layerId) {
     }
     if (map.getLayer(layerId)) return;
 
-    // Détection du type de géométrie dominant
     const types = new Set(
       (geojson.features || []).map(f => f.geometry?.type).filter(Boolean)
     );
@@ -522,7 +519,6 @@ function addGeoJSONLayer(key, config, geojson, layerId) {
     const hasPoint   = [...types].some(t => t.includes('Point'));
 
     if (isCommunes || (hasLine && !hasPolygon)) {
-      // Ligne
       map.addLayer({
         id: layerId, type: 'line', source: sourceId,
         paint: {
@@ -533,7 +529,6 @@ function addGeoJSONLayer(key, config, geojson, layerId) {
         layout: { visibility: 'none' }
       });
     } else if (hasPolygon) {
-      // Polygone
       map.addLayer({
         id: layerId, type: 'fill', source: sourceId,
         paint: {
@@ -544,7 +539,6 @@ function addGeoJSONLayer(key, config, geojson, layerId) {
         layout: { visibility: 'none' }
       });
     } else if (hasPoint) {
-      // Points
       map.addLayer({
         id: layerId, type: 'circle', source: sourceId,
         paint: {
@@ -619,22 +613,8 @@ map.on('load', () => {
 updateStatus();
 
 // ============================================================
-// 5. Export PDF
+// 5. EXPORT PDF EXPERT
 // ============================================================
-async function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) return resolve();
-    const s = document.createElement('script');
-    s.src = src; s.onload = resolve; s.onerror = reject;
-    document.head.appendChild(s);
-  });
-}
-
-async function ensureExportLibs() {
-  await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
-  await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
-}
-
 const exportBtn = document.getElementById('export-btn');
 const exportOverlay = document.getElementById('export-overlay');
 
@@ -642,26 +622,22 @@ exportBtn.addEventListener('click', async () => {
   exportBtn.disabled = true;
   exportOverlay.classList.add('show');
 
-  const wasCollapsed = panel.classList.contains('collapsed');
-  if (!wasCollapsed) {
-    panel.classList.add('collapsed');
-    toggleBtn.textContent = '▶';
-    await new Promise(r => setTimeout(r, 350));
-  }
-  map.resize();
-  await new Promise(r => setTimeout(r, 500));
-
   try {
-    await ensureExportLibs();
-    const canvas = await html2canvas(document.getElementById('map'), {
-      useCORS: true,
-      allowTaint: false,
-      backgroundColor: '#ffffff',
-      scale: window.devicePixelRatio > 1 ? 2 : 1.5,
-      logging: false
+    // Forcer un repaint complet
+    map.triggerRepaint();
+    await new Promise(r => setTimeout(r, 600));
+
+    // Attendre que la carte soit idle (toutes tuiles chargées)
+    await new Promise((resolve) => {
+      if (map.loaded()) return resolve();
+      map.once('idle', resolve);
+      setTimeout(resolve, 4000); // sécurité
     });
 
-    const imgData = canvas.toDataURL('image/png');
+    // Capture DIRECTE du canvas WebGL (contourne CORS & html2canvas)
+    const canvas = map.getCanvas();
+    const dataURL = canvas.toDataURL('image/png');
+
     const { jsPDF } = window.jspdf;
     const orientation = canvas.width >= canvas.height ? 'landscape' : 'portrait';
     const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a4' });
@@ -670,7 +646,9 @@ exportBtn.addEventListener('click', async () => {
     const pageH = pdf.internal.pageSize.getHeight();
     const margin = 10;
     const titleH = 14;
+    const legendH = 22;
 
+    // ---------- Bandeau titre ----------
     pdf.setFillColor(15, 15, 20);
     pdf.rect(0, 0, pageW, titleH, 'F');
     pdf.setTextColor(255, 20, 147);
@@ -683,25 +661,27 @@ exportBtn.addEventListener('click', async () => {
     const dateStr = new Date().toLocaleString('fr-FR');
     pdf.text(`Export du ${dateStr}`, pageW - margin, 9, { align: 'right' });
 
+    // ---------- Carte ----------
     const availW = pageW - margin * 2;
-    const availH = pageH - titleH - margin * 2 - 12;
+    const availH = pageH - titleH - margin * 2 - legendH;
     const ratio = Math.min(availW / canvas.width, availH / canvas.height);
     const imgW = canvas.width * ratio;
     const imgH = canvas.height * ratio;
     const imgX = (pageW - imgW) / 2;
     const imgY = titleH + margin;
 
-    pdf.addImage(imgData, 'PNG', imgX, imgY, imgW, imgH);
+    pdf.addImage(dataURL, 'PNG', imgX, imgY, imgW, imgH);
 
-    const activeLayers = Array.from(document.querySelectorAll('input[data-layer]:checked'))
-           .map(cb => {
+    // ---------- Légende des couches actives ----------
+    const activeLayers =    Array.from(document.querySelectorAll('input[data-layer]:checked'))
+      .map(cb => {
         const label = cb.parentElement.textContent.trim();
         const key = cb.dataset.layer;
         return { label, color: registry[key]?.color || '#888' };
       });
 
     if (activeLayers.length) {
-      let ly = imgY + imgH + 10;
+      let ly = imgY + imgH + 8;
       pdf.setFontSize(7);
       pdf.setTextColor(80, 80, 80);
       pdf.setFont('helvetica', 'bold');
@@ -722,6 +702,7 @@ exportBtn.addEventListener('click', async () => {
       });
     }
 
+    // ---------- Pied de page ----------
     pdf.setTextColor(150, 150, 150);
     pdf.setFontSize(6);
     pdf.setFont('helvetica', 'normal');
@@ -734,24 +715,15 @@ exportBtn.addEventListener('click', async () => {
     pdf.save(`monitor-sar-reunion-${stamp}.pdf`);
   } catch (err) {
     console.error('Export PDF échoué :', err);
-    alert(
-      "L'export PDF a échoué :\n" + err.message +
-      "\n\nAstuce : les tuiles (surtout satellites) peuvent bloquer la capture " +
-      "pour des raisons de CORS. Essayez en mode Plan."
-    );
+    alert("L'export PDF a échoué :\n" + err.message);
   } finally {
-    if (!wasCollapsed) {
-      panel.classList.remove('collapsed');
-      toggleBtn.textContent = '◀';
-      setTimeout(() => map.resize(), 320);
-    }
     exportBtn.disabled = false;
     exportOverlay.classList.remove('show');
   }
 });
 
 // ============================================================
-// 6. Responsive : garder le panneau dans l'écran + resize carte
+// 6. RESPONSIVE
 // ============================================================
 window.addEventListener('resize', () => {
   const rect = panel.getBoundingClientRect();
@@ -765,12 +737,10 @@ window.addEventListener('resize', () => {
 });
 
 // ============================================================
-// 7. Raccourci clavier : Échap replie/déplie le panneau
+// 7. RACCOURCI : ÉCHAP
 // ============================================================
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    toggleBtn.click();
-  }
+  if (e.key === 'Escape') toggleBtn.click();
 });
 </script>
 </body>
