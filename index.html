@@ -330,15 +330,18 @@
 <script type="module">
 import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
 
+<script type="module">
+import * as maplibregl from 'https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs';
+
 // ============================================================
-// 1. Carte
+// 1. CARTE
 // ============================================================
 const map = new maplibregl.Map({
   container: 'map',
   style: 'https://tiles.openfreemap.org/styles/liberty',
   center: [55.5, -21.1],
   zoom: 9,
-  preserveDrawingBuffer: true   // ⚠️ INDISPENSABLE POUR L'EXPORT PDF
+  preserveDrawingBuffer: true   // ⚠️ INDISPENSABLE
 });
 
 window.map = map;
@@ -347,7 +350,7 @@ window.maplibregl = maplibregl;
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
 // ============================================================
-// 2. Bascule Plan / Satellite
+// 2. BASCULE PLAN / SATELLITE
 // ============================================================
 const PLAN_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 const SATELLITE_STYLE = {
@@ -408,7 +411,7 @@ document.querySelectorAll('#basemap-switch button').forEach(btn => {
 });
 
 // ============================================================
-// 3. Panneau déplaçable + bouton de repli
+// 3. PANNEAU DÉPLAÇABLE
 // ============================================================
 const panel = document.getElementById('panel');
 const header = document.getElementById('panel-header');
@@ -420,7 +423,6 @@ toggleBtn.addEventListener('click', (e) => {
   panel.classList.toggle('collapsed');
   const collapsed = panel.classList.contains('collapsed');
   toggleBtn.textContent = collapsed ? '▶' : '◀';
-  toggleBtn.setAttribute('aria-label', collapsed ? 'Déplier le panneau' : 'Replier le panneau');
   setTimeout(() => map.resize(), 320);
 });
 
@@ -441,26 +443,8 @@ document.addEventListener('mousemove', (e) => {
 });
 document.addEventListener('mouseup', () => { isDragging = false; });
 
-header.addEventListener('touchstart', (e) => {
-  if (e.target.closest('#toggle-btn')) return;
-  const touch = e.touches[0];
-  const rect = panel.getBoundingClientRect();
-  offsetX = touch.clientX - rect.left;
-  offsetY = touch.clientY - rect.top;
-  isDragging = true;
-}, { passive: true });
-document.addEventListener('touchmove', (e) => {
-  if (!isDragging) return;
-  const touch = e.touches[0];
-  let x = touch.clientX - offsetX, y = touch.clientY - offsetY;
-  x = Math.max(0, Math.min(x, window.innerWidth - panel.offsetWidth));
-  y = Math.max(0, Math.min(y, window.innerHeight - 80));
-  panel.style.left = x + 'px'; panel.style.top = y + 'px';
-}, { passive: true });
-document.addEventListener('touchend', () => { isDragging = false; });
-
 // ============================================================
-// 4. Registre des couches
+// 4. REGISTRE DES COUCHES
 // ============================================================
 const registry = {
   communes:                { file:'communes_reunion.geojson',              color:'#94a3b8', opacity:0, lineWidth:1.5, dash:[3,3] },
@@ -551,7 +535,7 @@ function addGeoJSONLayer(key, config, geojson, layerId) {
         layout: { visibility: 'none' }
       });
     } else {
-      console.warn(`⚠️ ${key} : type de géométrie non reconnu → couche ignorée.`, types);
+      console.warn(`⚠️ ${key} : type de géométrie non reconnu.`, types);
       return;
     }
 
@@ -574,7 +558,6 @@ async function loadLayer(key, config) {
     const geojson = await response.json();
 
     if (!geojson.features || !geojson.features.length) {
-      console.warn(`⚠️ ${key} : fichier vide (features: [])`);
       const cb = document.querySelector(`input[data-layer="${key}"]`);
       if (cb) { cb.disabled = true; cb.parentElement.style.opacity = .4; }
       loaded++; updateStatus(); return;
@@ -613,7 +596,7 @@ map.on('load', () => {
 updateStatus();
 
 // ============================================================
-// 5. EXPORT PDF EXPERT
+// 5. EXPORT PDF EXPERT (sans html2canvas)
 // ============================================================
 const exportBtn = document.getElementById('export-btn');
 const exportOverlay = document.getElementById('export-overlay');
@@ -623,21 +606,22 @@ exportBtn.addEventListener('click', async () => {
   exportOverlay.classList.add('show');
 
   try {
-    // Forcer un repaint complet
+    // 1. Forcer un repaint
     map.triggerRepaint();
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 500));
 
-    // Attendre que la carte soit idle (toutes tuiles chargées)
+    // 2. Attendre que la carte soit idle (tuiles chargées)
     await new Promise((resolve) => {
       if (map.loaded()) return resolve();
       map.once('idle', resolve);
-      setTimeout(resolve, 4000); // sécurité
+      setTimeout(resolve, 4000);
     });
 
-    // Capture DIRECTE du canvas WebGL (contourne CORS & html2canvas)
+    // 3. Capture DIRECTE du canvas WebGL
     const canvas = map.getCanvas();
     const dataURL = canvas.toDataURL('image/png');
 
+    // 4. Génération du PDF
     const { jsPDF } = window.jspdf;
     const orientation = canvas.width >= canvas.height ? 'landscape' : 'portrait';
     const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a4' });
@@ -648,7 +632,7 @@ exportBtn.addEventListener('click', async () => {
     const titleH = 14;
     const legendH = 22;
 
-    // ---------- Bandeau titre ----------
+    // Bandeau titre
     pdf.setFillColor(15, 15, 20);
     pdf.rect(0, 0, pageW, titleH, 'F');
     pdf.setTextColor(255, 20, 147);
@@ -661,7 +645,7 @@ exportBtn.addEventListener('click', async () => {
     const dateStr = new Date().toLocaleString('fr-FR');
     pdf.text(`Export du ${dateStr}`, pageW - margin, 9, { align: 'right' });
 
-    // ---------- Carte ----------
+    // Carte
     const availW = pageW - margin * 2;
     const availH = pageH - titleH - margin * 2 - legendH;
     const ratio = Math.min(availW / canvas.width, availH / canvas.height);
@@ -672,8 +656,8 @@ exportBtn.addEventListener('click', async () => {
 
     pdf.addImage(dataURL, 'PNG', imgX, imgY, imgW, imgH);
 
-    // ---------- Légende des couches actives ----------
-    const activeLayers =    Array.from(document.querySelectorAll('input[data-layer]:checked'))
+    // Légende
+    const activeLayers = Array.from(document.querySelectorAll('input[data-layer]:checked'))
       .map(cb => {
         const label = cb.parentElement.textContent.trim();
         const key = cb.dataset.layer;
@@ -702,7 +686,7 @@ exportBtn.addEventListener('click', async () => {
       });
     }
 
-    // ---------- Pied de page ----------
+    // Pied de page
     pdf.setTextColor(150, 150, 150);
     pdf.setFontSize(6);
     pdf.setFont('helvetica', 'normal');
@@ -711,6 +695,7 @@ exportBtn.addEventListener('click', async () => {
       pageW / 2, pageH - 3, { align: 'center' }
     );
 
+    // Sauvegarde
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
     pdf.save(`monitor-sar-reunion-${stamp}.pdf`);
   } catch (err) {
@@ -737,7 +722,7 @@ window.addEventListener('resize', () => {
 });
 
 // ============================================================
-// 7. RACCOURCI : ÉCHAP
+// 7. RACCOURCI ÉCHAP
 // ============================================================
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') toggleBtn.click();
