@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<title>Monitor SAR — La Réunion</title>
+<title>SAR — La Réunion</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:,">
 <link href="https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.css" rel="stylesheet">
@@ -592,40 +592,167 @@ map.on('load', () => {
 
 updateStatus();
 
+// 5. EXPORT PDF - capture robuste (v2)
 // ============================================================
-// 5. EXPORT PDF (capture via requestAnimationFrame)
+// Ameliorations vs version originale :
+//   1. waitForMapReady() : polling de map.loaded() jusqu'a 30 s (au lieu de 5 s)
+//   2. waitForIdle() : attend VRAIMENT l'etat idle, sans timeout court
+//   3. captureCanvas() : 3 tentatives avec verification de canvas non-vide
+//   4. blankCheck() : analyse des pixels pour detecter un canvas tout blanc/noir
+//   5. Messages d'erreur explicites indiquant le navigateur/cause
+//   6. Footer corrige (fix le bug NaN de la version originale ligne 694-698)
 // ============================================================
 const exportBtn = document.getElementById('export-btn');
 const exportOverlay = document.getElementById('export-overlay');
 
+function setOverlayText(msg) {
+  exportOverlay.innerHTML = '<div class="spinner"></div>' + msg;
+}
+
+/**
+ * Attend que map.loaded() renvoie true, en pollant toutes les 200 ms.
+ * Timeout maximum : 30 s (vs 5 s dans la version originale - insuffisant
+ * pour l'enveloppe urbaine 42 Mo / 3 589 polygones).
+ */
+function waitForMapReady(timeoutMs = 30000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const check = () => {
+      try {
+        if (map.loaded() && map.isStyleLoaded() && map.areTilesLoaded()) {
+          return resolve();
+        }
+      } catch (e) { /* map peut ne pas etre pret */ }
+      if (Date.now() - start > timeoutMs) {
+        console.warn('Timeout waitForMapReady, mais on tente la capture quand meme.');
+        return resolve();
+      }
+      setTimeout(check, 200);
+    };
+    check();
+  });
+}
+
+/**
+ * Attend l'evenement 'idle' (la carte a fini de charger ET de dessiner).
+ * Combine map.once('idle') + un polling de securite.
+ */
+function waitForIdle(timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(); } };
+    map.once('idle', finish);
+    const start = Date.now();
+    const poll = () => {
+      if (done) return;
+      try {
+        if (map.loaded() && Date.now() - start > 1500) return finish();
+      } catch (e) {}
+      if (Date.now() - start > timeoutMs) return finish();
+      setTimeout(poll, 200);
+    };
+    poll();
+  });
+}
+
+/**
+ * Verifie qu'un dataURL d'image n'est PAS tout blanc / tout noir.
+ * Echantillonne sur un canvas 100x100 et calcule la variance de luminosite.
+ * Une carte reelle aura une variance > 20 ; un canvas vide sera ~0.
+ */
+function isCanvasBlank(dataURL) {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        const sample = document.createElement('canvas');
+        sample.width = 100; sample.height = 100;
+        const ctx = sample.getContext('2d');
+        ctx.drawImage(img, 0, 0, 100, 100);
+        const data = ctx.getImageData(0, 0, 100, 100).data;
+        let sum = 0, sumSq = 0, n = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const lum = (data[i] + data[i+1] + data[i+2]) / 3;
+          sum += lum; sumSq += lum * lum; n++;
+        }
+        const mean = sum / n;
+        const variance = (sumSq / n) - (mean * mean);
+        console.log('Canvas check : variance=' + variance.toFixed(1) + ' (seuil >20 = OK)');
+        resolve(variance < 20);
+      };
+      img.onerror = () => resolve(true);
+      img.src = dataURL;
+    } catch (e) {
+      console.error('isCanvasBlank error:', e);
+      resolve(true);
+    }
+  });
+}
+
+/**
+ * Capture le canvas WebGL en PNG. Tente jusqu'a 3 fois avec attente entre.
+ */
+async function captureCanvas(maxAttempts = 3) {
+  let lastDataURL = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    setOverlayText('Capture de la carte (tentative ' + attempt + '/' + maxAttempts + ')...');
+    map.triggerRepaint();
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await waitForIdle(8000);
+    await new Promise(r => setTimeout(r, 300));
+
+    const canvas = map.getCanvas();
+    let dataURL;
+    try {
+      dataURL = canvas.toDataURL('image/png');
+    } catch (e) {
+      throw new Error(
+        "Le navigateur a refuse la capture WebGL (toDataURL).\n" +
+        "Cause probable : preserveDrawingBuffer desactive ou CORS.\n" +
+        "Details : " + e.message
+      );
+    }
+    lastDataURL = dataURL;
+    const blank = await isCanvasBlank(dataURL);
+    if (!blank && dataURL.length > 50000) {
+      console.log('Capture reussie (tentative ' + attempt + ', ' + dataURL.length + ' octets)');
+      return dataURL;
+    }
+    console.warn('Tentative ' + attempt + ' : canvas blanc/variance faible (taille=' + dataURL.length + ').');
+    if (attempt < maxAttempts) {
+      setOverlayText('Canvas vide detecte - nouvelle tentative dans 2 s...');
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+  throw new Error(
+    "Apres " + maxAttempts + " tentatives, la capture est toujours blanche.\n" +
+    "Causes possibles :\n" +
+    "  - Les couches ne sont pas encore chargees (attendez 10-20 s avant export)\n" +
+    "  - Le navigateur bloque WebGL (essayez Chrome/Edge recent)\n" +
+    "  - L'acceleration materielle est desactivee\n" +
+    'Astuce : cochez les couches une par une, attendez le statut "12/12" en bas a droite.'
+  );
+}
+
 exportBtn.addEventListener('click', async () => {
   exportBtn.disabled = true;
   exportOverlay.classList.add('show');
+  setOverlayText('Initialisation...');
 
   try {
-    await new Promise((resolve) => {
-      if (map.loaded()) return resolve();
-      map.once('idle', resolve);
-      setTimeout(resolve, 5000);
-    });
+    // 1. Attendre que toutes les tuiles soient chargees (jusqu'a 30 s)
+    setOverlayText('Chargement des couches en cours...');
+    await waitForMapReady(30000);
 
-    const dataURL = await new Promise((resolve) => {
-      map.triggerRepaint();
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const canvas = map.getCanvas();
-          resolve(canvas.toDataURL('image/png'));
-        });
-      });
-    });
+    // 2. Petite pause pour laisser le style se stabiliser
+    setOverlayText('Rendu final de la carte...');
+    await new Promise(r => setTimeout(r, 500));
+    await waitForIdle(10000);
 
-    if (!dataURL || dataURL.length < 100000) {
-      throw new Error(
-        'La capture de la carte a échoué (canvas vide).\n' +
-        'Essayez dans Chrome ou Edge, ou désactivez le blocage WebGL.'
-      );
-    }
+    // 3. Capture avec verification de canvas non-vide
+    const dataURL = await captureCanvas(3);
 
+    // 4. Generation du PDF
     const { jsPDF } = window.jspdf;
     const canvas = map.getCanvas();
     const orientation = canvas.width >= canvas.height ? 'landscape' : 'portrait';
@@ -642,12 +769,12 @@ exportBtn.addEventListener('click', async () => {
     pdf.setTextColor(255, 20, 147);
     pdf.setFont('helvetica', 'bold');
     pdf.setFontSize(12);
-    pdf.text('Monitor SAR — La Réunion', margin, 9);
+    pdf.text('Monitor SAR - La Reunion', margin, 9);
     pdf.setTextColor(200, 200, 200);
     pdf.setFont('helvetica', 'normal');
     pdf.setFontSize(8);
     const dateStr = new Date().toLocaleString('fr-FR');
-    pdf.text(`Export du ${dateStr}`, pageW - margin, 9, { align: 'right' });
+    pdf.text('Export du ' + dateStr, pageW - margin, 9, { align: 'right' });
 
     const availW = pageW - margin * 2;
     const availH = pageH - titleH - margin * 2 - legendH;
@@ -688,20 +815,27 @@ exportBtn.addEventListener('click', async () => {
       });
     }
 
+    // Footer propre (fixe le bug NaN de la version originale)
     pdf.setTextColor(150, 150, 150);
     pdf.setFontSize(6);
     pdf.setFont('helvetica', 'normal');
     pdf.text(
-      'Source : données SAR — La Réunion · Généré avec Monitor SAR',
-      pageW / 2, pageH -       'Source : données SAR — La Réunion · Généré avec Monitor SAR',
+      'Source : donnees SAR - La Reunion - Genere avec Monitor SAR',
       pageW / 2, pageH - 3, { align: 'center' }
     );
 
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-    pdf.save(`monitor-sar-reunion-${stamp}.pdf`);
+    pdf.save('monitor-sar-reunion-' + stamp + '.pdf');
   } catch (err) {
-    console.error('Export PDF échoué :', err);
-    alert("L'export PDF a échoué :\n" + err.message);
+    console.error('Export PDF echoue :', err);
+    let diag = 'N/A';
+    try {
+      diag = 'Statut carte : ' + loaded + '/' + total + ' couches chargees\n' +
+             'map.loaded() : ' + map.loaded() + '\n' +
+             'map.areTilesLoaded() : ' + (map.areTilesLoaded ? map.areTilesLoaded() : 'N/A') + '\n' +
+             'Taille canvas : ' + map.getCanvas().width + 'x' + map.getCanvas().height + 'px';
+    } catch (e) { diag = 'Diagnostic indisponible : ' + e.message; }
+    alert("L'export PDF a echoue :\n\n" + err.message + "\n\n--- Diagnostic ---\n" + diag);
   } finally {
     exportBtn.disabled = false;
     exportOverlay.classList.remove('show');
